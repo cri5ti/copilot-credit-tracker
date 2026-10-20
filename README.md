@@ -8,22 +8,6 @@ A VS Code status bar item that shows how many GitHub Copilot AI credits you have
 
 **Enterprise only.** This extension is built for enterprise-managed GitHub accounts (for example `name_company` logins with a Copilot Business or Enterprise seat). It was not designed or tested for personal Copilot plans.
 
-## Fork notice
-
-This started as a fork of [0RuiAlvel0/copilot-credit-tracker](https://github.com/0RuiAlvel0/copilot-credit-tracker) and has since diverged into a different extension with a different data source and UI.
-
-| | Original | Copilot Tracker Ent |
-| --- | --- | --- |
-| Accounts | Personal Copilot plans | Enterprise-managed accounts |
-| Where usage comes from | GitHub billing API for the signed-in user | The Copilot quota endpoint VS Code itself uses (`copilot_internal/user`) |
-| GitHub permission | `user` scope | `read:user`, which VS Code already holds, so no extra consent prompt |
-| Month progress | Calendar days | Workdays (Monday to Friday) |
-| Status bar | Percentages of month and usage | Coloured circle, usage % and daily allowance standing |
-| Panel | Usage by model and 12-month history | Month and Today timelines |
-| Diagnostics | Debug console | Output channel and a Logs button |
-
-The billing API returns 400 for enterprise-managed users, and GitHub offers no history or per-model data to them (only to admins), so the original's history and model breakdown are gone.
-
 ## What the status bar shows
 
 ```
@@ -77,6 +61,10 @@ Run **Copilot Tracker Ent: Show Log** from the Command Palette, or press **Logs*
 ## Privacy
 
 The extension uses VS Code's built-in GitHub sign-in with the `read:user` scope and makes one call per refresh, to `https://api.github.com/copilot_internal/user`. Nothing is stored or sent anywhere else.
+
+## Fork notice
+
+This started as a fork of [0RuiAlvel0/copilot-credit-tracker](https://github.com/0RuiAlvel0/copilot-credit-tracker) and has since been rewritten as an enterprise-only extension.
 
 ## License
 
