@@ -1,10 +1,23 @@
 {
-  "name": "copilot-credit-tracker",
-  "displayName": "Copilot Credit Tracker",
-  "description": "Tracks GitHub Copilot AI credit usage against the current month.",
+  "name": "copilot-tracker-ent",
+  "displayName": "Copilot Tracker Ent",
+  "description": "Status bar tracker for GitHub Copilot AI credits on enterprise-managed accounts, paced against the month's workdays.",
   "icon": "logo-0.0.3.png",
-  "version": "0.1.3",
-  "publisher": "supertechman",
+  "version": "0.2.0",
+  "publisher": "cri5ti",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cri5ti/copilot-credit-tracker.git"
+  },
+  "license": "MIT",
+  "keywords": [
+    "github copilot",
+    "copilot",
+    "ai credits",
+    "usage",
+    "enterprise",
+    "status bar"
+  ],
   "engines": {
     "vscode": "^1.125.0"
   },
@@ -20,19 +33,31 @@
   "main": "./out/extension.js",
   "contributes": {
     "configuration": {
-      "title": "Copilot Credit Tracker",
+      "title": "Copilot Tracker Ent",
       "properties": {
-        "copilotCreditTracker.monthlyLimit": {
+        "copilotTrackerEnt.monthlyLimit": {
           "type": "number",
           "default": 7000,
-          "description": "Your monthly GitHub AI credit limit (e.g., 1500 for Pro, 7000 for Pro+)"
+          "description": "Fallback monthly AI credit limit, used only when GitHub does not report one for your account."
         }
       }
     },
     "commands": [
       {
-        "command": "copilot-credit-tracker.showPanel",
-        "title": "Copilot Credit Tracker: Show Breakdown"
+        "command": "copilot-tracker-ent.showPanel",
+        "title": "Copilot Tracker Ent: Show Panel"
+      },
+      {
+        "command": "copilot-tracker-ent.showLog",
+        "title": "Copilot Tracker Ent: Show Log"
+      },
+      {
+        "command": "copilot-tracker-ent.refresh",
+        "title": "Copilot Tracker Ent: Refresh Now"
+      },
+      {
+        "command": "copilot-tracker-ent.reauthenticate",
+        "title": "Copilot Tracker Ent: Re-authenticate with GitHub"
       }
     ]
   },

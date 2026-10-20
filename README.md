@@ -1,153 +1,81 @@
-# Goal & Quick Overview
+# Copilot Tracker Ent
 
-### **When you have a GitHub Copilot subscription, you know how much you will spend, you just want to pace yourself throughout the month. This is what this extension helps you do.**
+A VS Code status bar item that shows how many GitHub Copilot AI credits you have used this month, compared with how far through the month's workdays you are.
 
----------
+![Status bar](docs/status-bar.png)
 
-A simple VS Code extension that compares your GitHub Copilot monthly credit usage with how much of the month has passed. I built it for a quick status bar check to see whether I am on track or running ahead of budget, without needing a full dashboard or detailed cost analysis.
+**Enterprise only.** This extension is built for enterprise-managed GitHub accounts (for example `name_company` logins with a Copilot Business or Enterprise seat). It was not designed or tested for personal Copilot plans.
 
-It shows this simple status bar message like this:
+## Fork notice
 
-![Copilot Credit Tracker Screenshot](https://ik.imagekit.io/supertechman/Screenshot%202026-07-15%20170018.png?updatedAt=1784106174855)
+This started as a fork of [0RuiAlvel0/copilot-credit-tracker](https://github.com/0RuiAlvel0/copilot-credit-tracker) and has since diverged into a different extension with a different data source and UI.
 
-It will turn red if your usage pace is ahead of your monthly budget.
+| | Original | Copilot Tracker Ent |
+| --- | --- | --- |
+| Accounts | Personal Copilot plans | Enterprise-managed accounts |
+| Where usage comes from | GitHub billing API for the signed-in user | The Copilot quota endpoint VS Code itself uses (`copilot_internal/user`) |
+| GitHub permission | `user` scope | `read:user`, which VS Code already holds, so no extra consent prompt |
+| Month progress | Calendar days | Workdays (Monday to Friday) |
+| Status bar | Percentages of month and usage | Coloured circle, usage % and daily allowance standing |
+| Panel | Usage by model and 12-month history | Month and Today timelines |
+| Diagnostics | Debug console | Output channel and a Logs button |
 
-Because I can (and really not because I need), there's a bit more detail in a webview panel that breaks down usage by model and shows the total usage percentage. That looks like this:
+The billing API returns 400 for enterprise-managed users, and GitHub offers no history or per-model data to them (only to admins), so the original's history and model breakdown are gone.
 
-![Copilot Credit Tracker Screenshot](https://ik.imagekit.io/supertechman/thisistheman.png?updatedAt=1784106489390)
+## What the status bar shows
 
-# Contacts
+```
+🔴 59% (-2,848 [400])
+🟡 59% (125 / 400)
+🟢 59% (+1,284 [400])
+```
 
-- GitHub: [supertechman](https://github.com/0RuiAlvel0/copilot-credit-tracker)
-- website: [supertechman.com](https://site.supertechman.com/posts/show/copilot-credit-tracker-in)
+`59%` is the share of your monthly credits used. `[400]` is your daily allowance: the monthly limit spread over the month's workdays. Today's slice of the budget runs from the allowance through yesterday to the allowance through today.
 
-# Copilot Credit Tracker
+| Circle | Meaning | Status bar | Tooltip |
+| --- | --- | --- | --- |
+| 🟢 | Below today's slice: you are ahead | `(+1,284 [400])` | `1,284 credits ahead; 400 credits per day` |
+| 🟡 | Inside today's slice | `(125 / 400)` | `125 credits today; 400 credits per day` |
+| 🔴 | Above today's slice: you are over | `(-2,848 [400])` | `2,848 credits over; 400 credits per day` |
 
-Track your GitHub Copilot monthly AI credit usage directly in VS Code.
+The tooltip also shows credits used, the limit and the workday count.
 
-This extension adds a status bar indicator that compares:
-- how much of the current month has passed
-- how much of your monthly Copilot credit budget has been used
+## Panel
 
-Click the status bar item to open a detailed panel with a model-by-model usage breakdown.
+Click the status bar item for the full panel.
 
-The panel also includes a cached 12-month history view so you can compare current usage against previous months.
+![Panel](docs/preview.png)
 
-## Features
+- **Month:** a bar from 0 to your limit, one tick per workday. The arrow shows credits used and the line marks the allowance through today.
+- **Today:** the same view zoomed in on today's slice. The line is the time of day (the full bar on weekends). If you are outside the slice, the arrow becomes a side arrow showing the credits ahead or over.
+- **Refresh**, **Re-authenticate** and **Logs** buttons. The same actions are in the Command Palette under "Copilot Tracker Ent".
 
-- Status bar usage snapshot (month progress vs credit usage)
-- Overuse warning when usage is ahead of month progress
-- Detailed webview panel with:
-	- month elapsed
-	- total credits used
-	- usage percentage
-	- usage by model
-- Previous 12 months history table (month, credits used, limit, usage percentage, and last synced date)
-- Manual "Refresh History" action to re-sync historical usage from GitHub
-- Configurable monthly credit limit
+## Install
 
-## How It Works
+From the Marketplace: search for **Copilot Tracker Ent**, or run `ext install cri5ti.copilot-tracker-ent`.
 
-1. On startup, the extension checks your GitHub authentication session in VS Code.
-2. It requests your GitHub user profile.
-3. It fetches your monthly AI credit usage from GitHub billing APIs.
-4. It calculates your usage percentage against your configured monthly limit.
-5. It updates the status bar and refreshes automatically every 30 minutes.
+From a `.vsix`: get it from the [releases page](https://github.com/cri5ti/copilot-credit-tracker/releases), or build it with `npm install` and `npx @vscode/vsce package`. In VS Code open Extensions, click `...`, choose **Install from VSIX...** and pick the file.
 
-If you are not signed in, the extension prompts you to authenticate with GitHub.
+Then sign in to GitHub when prompted.
 
-## Requirements
+## Settings
 
-- VS Code 1.125.0 or newer (at least this was the one it was developed for and tested on)
-- GitHub Authentication extension enabled (built-in dependency: vscode.github-authentication)
-- A GitHub account with Copilot access
+| Setting | Default | Description |
+| --- | --- | --- |
+| `copilotTrackerEnt.monthlyLimit` | `7000` | Fallback monthly credit limit, used only if GitHub does not report one. |
 
-## Installation
+## Limits
 
-### Option 1: From Marketplace (when published)
-
-1. Open Extensions in VS Code.
-2. Search for Copilot Credit Tracker.
-3. Click Install.
-
-### Option 2: From VSIX (local/manual install)
-
-0. You can download the latest .vsix file from the releases page. If you do that, you can start on step 2. Otherwise, you can build the .vsix file yourself from the source code:
-1. Package the extension:
-	 - npm install
-	 - npm run compile
-	 - npx @vscode/vsce package
-2. In VS Code, open Extensions.
-3. Select More Actions (three dots) and choose Install from VSIX.
-4. Pick the generated .vsix file.
-
-## Usage
-
-1. Open VS Code.
-2. Sign in to GitHub if prompted.
-3. Look at the right side of the status bar for the Copilot usage indicator.
-4. Click the status bar item to open the full monthly breakdown panel.
-5. In the panel, review the "Previous 12 Months" table and use "Refresh History" to sync updated historical data.
-
-Status meanings:
-- check icon: usage pace is healthy
-- warning icon: usage pace is ahead of month progress
-- API Error: request to GitHub failed
-- Auth Required: GitHub sign-in is needed
-
-## Configuration
-
-This extension contributes one setting:
-
-- copilotCreditTracker.monthlyLimit
-	- Type: number
-	- Default: 7000
-	- Description: your monthly GitHub AI credit cap
-
-Example values:
-- 1500 for a lower-tier plan
-- 7000 for a higher-tier plan
-
-Update this in Settings if your monthly credit allowance differs from the default.
-
-## Data and Permissions
-
-The extension uses your GitHub auth token from VS Code to call:
-- https://api.github.com/user
-- https://api.github.com/users/{login}/settings/billing/ai_credit/usage
-
-Data is used only to compute and display your usage inside VS Code.
-No backend service is included in this extension.
+The quota endpoint is internal and undocumented, so GitHub can change it without notice. It reports only the current total, with no history.
 
 ## Troubleshooting
 
-- Auth Required shown in status bar:
-	- Sign in to GitHub via VS Code Accounts menu, then wait for refresh.
-- API Error shown in status bar:
-	- Verify internet access.
-	- Confirm your GitHub account can access Copilot billing usage.
-	- Reload VS Code and try again.
-- No usage data in panel:
-	- There may be no usage yet for the selected month.
-	- Wait for the next refresh or reload window.
+Run **Copilot Tracker Ent: Show Log** from the Command Palette, or press **Logs** in the panel. It lists each GitHub request, its HTTP status and the token scopes. No tokens are logged.
 
-## Development
+## Privacy
 
-1. Install dependencies:
-	 - npm install
-2. Build once:
-	 - npm run compile
-3. Watch mode:
-	 - npm run watch
-4. Run extension tests:
-	 - npm test
-5. Launch extension in a VS Code Extension Development Host using F5.
+The extension uses VS Code's built-in GitHub sign-in with the `read:user` scope and makes one call per refresh, to `https://api.github.com/copilot_internal/user`. Nothing is stored or sent anywhere else.
 
-## Known Notes
+## License
 
-- Usage refresh interval is 30 minutes.
-- The default monthly limit is a fallback value; configure it for your real plan.
-
-## Changelog
-
-See CHANGELOG.md for version history.
+MIT. See [LICENSE](LICENSE).

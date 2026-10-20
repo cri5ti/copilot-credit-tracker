@@ -1,53 +1,82 @@
 import * as vscode from 'vscode';
 import {
-    MonthlyUsageSnapshot,
-    MonthRef,
+    DailyBudget,
+    PaceStatus,
+    Timeline,
+    WorkdayProgress,
     calculateUsagePercentage,
-    createSnapshot,
-    filterAndSortHistory,
-    formatMonthLabel,
-    getPreviousMonthRefs,
-    sumGrossQuantity,
-    upsertAndFilterHistory
-} from './history';
+    getDailyBudget,
+    getDayTimeline,
+    getMonthTimeline,
+    getWorkdayProgress
+} from './usage';
 
 let statusBarItem: vscode.StatusBarItem;
-let extensionContext: vscode.ExtensionContext;
 let detailsPanel: vscode.WebviewPanel | undefined;
+let outputChannel: vscode.OutputChannel;
 
-const HISTORY_KEY = 'copilotCreditTracker.previous12MonthHistory.v1';
-const PREVIOUS_MONTH_COUNT = 12;
 const GITHUB_API_TIMEOUT_MS = 15000;
-
-type BillingUsageItem = {
-    model?: string;
-    sku?: string;
-    grossQuantity?: number;
-};
-
-type BillingUsageResponse = {
-    usageItems?: BillingUsageItem[];
-};
-
-type RefreshResult = 'success' | 'partial' | 'not_logged_in' | 'api_error';
+const REFRESH_INTERVAL_MS = 1000 * 60 * 15;
+// Same scope VS Code's own Copilot features already hold, so no extra consent prompt.
+const GITHUB_SCOPES = ['read:user'];
+const MAX_LOGGED_QUOTA_BODY_LENGTH = 2000;
+const MAX_LOGGED_BODY_LENGTH = 500;
 
 // Cache these values globally so the Webview panel can read them instantly.
-let cachedUsageData: BillingUsageResponse | null = null;
-let cachedMonthProgress: number = 0;
+let cachedWorkdays: WorkdayProgress = { elapsed: 0, total: 0 };
 let cachedTotalUsed: number = 0;
 let cachedLimit: number = 7000;
-let cachedPreviousHistory: MonthlyUsageSnapshot[] = [];
+let lastRefreshSummary = 'Not refreshed yet.';
+
+const STATUS_COLORS: Record<PaceStatus, string> = { under: '#4caf50', on_pace: '#e0a800', over: '#f44336' };
+const PACE_ICONS: Record<PaceStatus, string> = { under: '🟢', on_pace: '🟡', over: '🔴' };
+
+function formatCredits(value: number): string {
+    return Math.round(value).toLocaleString('en-US');
+}
+
+function describeBudget(budget: DailyBudget): { badge: string; message: string } {
+    switch (budget.status) {
+        case 'over':
+            return { badge: `-${formatCredits(budget.amount)} [${formatCredits(budget.perDay)}]`, message: `${formatCredits(budget.amount)} credits over` };
+        case 'under':
+            return { badge: `+${formatCredits(budget.amount)} [${formatCredits(budget.perDay)}]`, message: `${formatCredits(budget.amount)} credits ahead` };
+        case 'on_pace':
+            return { badge: `${formatCredits(budget.amount)} / ${formatCredits(budget.perDay)}`, message: `${formatCredits(budget.amount)} credits today` };
+    }
+}
+
+function log(message: string, error?: unknown): void {
+    const timestamp = new Date().toISOString();
+    const detail = error === undefined
+        ? ''
+        : ` | ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`;
+    outputChannel?.appendLine(`[${timestamp}] ${message}${detail}`);
+}
 
 export function activate(context: vscode.ExtensionContext) {
-    extensionContext = context;
+    outputChannel = vscode.window.createOutputChannel('Copilot Tracker Ent');
+    context.subscriptions.push(outputChannel);
+    log(`Activated (extension version ${context.extension.packageJSON.version}).`);
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     context.subscriptions.push(statusBarItem);
 
-    const showPanelCommandId = 'copilot-credit-tracker.showPanel';
-    cachedPreviousHistory = readHistoryFromState();
+    const showPanelCommandId = 'copilot-tracker-ent.showPanel';
 
     context.subscriptions.push(vscode.commands.registerCommand(showPanelCommandId, async () => {
         await showDetailsPanel();
+    }));
+
+    context.subscriptions.push(vscode.commands.registerCommand('copilot-tracker-ent.showLog', () => {
+        outputChannel.show(true);
+    }));
+
+    context.subscriptions.push(vscode.commands.registerCommand('copilot-tracker-ent.refresh', async () => {
+        await updateStatusBar();
+    }));
+
+    context.subscriptions.push(vscode.commands.registerCommand('copilot-tracker-ent.reauthenticate', async () => {
+        await reauthenticate();
     }));
 
     statusBarItem.command = showPanelCommandId;
@@ -55,7 +84,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     const intervalHandle = setInterval(() => {
         void updateStatusBar();
-    }, 1000 * 60 * 30);
+    }, REFRESH_INTERVAL_MS);
 
     context.subscriptions.push({
         dispose: () => clearInterval(intervalHandle)
@@ -64,239 +93,219 @@ export function activate(context: vscode.ExtensionContext) {
 
 async function updateStatusBar(): Promise<void> {
     try {
-        cachedMonthProgress = getMonthProgress();
+        log('Refreshing status bar.');
+        cachedWorkdays = getWorkdayProgress();
         const status = await fetchCopilotData();
+        lastRefreshSummary = `${new Date().toLocaleTimeString()}: ${describeStatus(status)}`;
+        log(`Refresh result: ${status}.`);
 
         if (status === 'not_logged_in') {
             statusBarItem.text = '$(github) GHCP: Auth Required';
+            statusBarItem.tooltip = 'Click to open the panel, then use Re-authenticate.';
             statusBarItem.color = '#ffcc00';
-            statusBarItem.show();
-            return;
-        }
-
-        if (status === 'api_error') {
+        } else if (status === 'api_error') {
             statusBarItem.text = '$(error) GHCP: API Error';
-            statusBarItem.tooltip = 'Click to view details or check Debug Console.';
+            statusBarItem.tooltip = 'GitHub request failed. Click to open the panel and use Logs.';
             statusBarItem.color = '#ff4d4d';
-            statusBarItem.show();
-            return;
+        } else {
+            const usagePercentage = calculateUsagePercentage(cachedTotalUsed, cachedLimit);
+            const budget = getDailyBudget(cachedTotalUsed, cachedLimit, cachedWorkdays);
+            const { badge, message } = describeBudget(budget);
+
+            statusBarItem.text = `${PACE_ICONS[budget.status]} ${usagePercentage.toFixed(0)}% (${badge})`;
+            statusBarItem.tooltip = `${message}; ${formatCredits(budget.perDay)} credits per day
+${formatCredits(cachedTotalUsed)} of ${formatCredits(cachedLimit)} credits used (${usagePercentage.toFixed(1)}%), workday ${cachedWorkdays.elapsed} of ${cachedWorkdays.total}. Click for details.`;
+            statusBarItem.color = undefined;
         }
 
-        const usagePercentage = calculateUsagePercentage(cachedTotalUsed, cachedLimit);
-        const isOverspending = usagePercentage > cachedMonthProgress;
-        const icon = isOverspending ? '$(warning)' : '$(check)';
-
-        statusBarItem.text = `${icon} Month: ${cachedMonthProgress.toFixed(0)}% | GHCP: ${usagePercentage.toFixed(0)}%`;
-        statusBarItem.tooltip = 'Click to view full Copilot usage breakdown';
-        statusBarItem.color = isOverspending ? '#ff4d4d' : undefined;
         statusBarItem.show();
-
-        if (detailsPanel) {
-            await renderDetailsPanel(detailsPanel);
-        }
     } catch (error) {
-        console.error('Failed to update GHCP status', error);
+        lastRefreshSummary = `${new Date().toLocaleTimeString()}: unexpected error (see Logs).`;
+        log('Failed to update status bar.', error);
+    }
+
+    if (detailsPanel) {
+        await renderDetailsPanel(detailsPanel);
     }
 }
 
-function getMonthProgress(): number {
-    const now = new Date();
-    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    return (now.getDate() / endOfMonth.getDate()) * 100;
+function describeStatus(status: 'success' | 'not_logged_in' | 'api_error'): string {
+    switch (status) {
+        case 'success':
+            return 'usage loaded.';
+        case 'not_logged_in':
+            return 'not signed in to GitHub.';
+        case 'api_error':
+            return 'GitHub request failed (see Logs).';
+    }
+}
+
+async function reauthenticate(): Promise<void> {
+    log('Re-authentication requested.');
+    try {
+        const session = await vscode.authentication.getSession('github', GITHUB_SCOPES, {
+            forceNewSession: { detail: 'Sign in again to refresh the GitHub token used by Copilot Tracker Ent.' }
+        });
+        log(`Re-authentication finished for "${session.account.label}" with scopes [${session.scopes.join(', ')}].`);
+    } catch (error) {
+        log('Re-authentication cancelled or failed.', error);
+        lastRefreshSummary = `${new Date().toLocaleTimeString()}: re-authentication cancelled or failed.`;
+        if (detailsPanel) {
+            await renderDetailsPanel(detailsPanel);
+        }
+        return;
+    }
+
+    await updateStatusBar();
 }
 
 async function fetchCopilotData(): Promise<'success' | 'not_logged_in' | 'api_error'> {
-    const session = await vscode.authentication.getSession('github', ['user'], { createIfNone: false });
+    const session = await vscode.authentication.getSession('github', GITHUB_SCOPES, { createIfNone: false });
 
     if (!session) {
+        log('No GitHub session found; sign-in required.');
         vscode.window.showInformationMessage('Please sign in to GitHub to track Copilot credits.', 'Sign In').then(selection => {
             if (selection === 'Sign In') {
-                void vscode.authentication.getSession('github', ['user'], { createIfNone: true });
+                void vscode.authentication.getSession('github', GITHUB_SCOPES, { createIfNone: true });
             }
         });
         return 'not_logged_in';
     }
 
-    const userLogin = await fetchAuthenticatedUserLogin(session.accessToken);
-    if (!userLogin) {
-        return 'api_error';
-    }
+    log(`GitHub session found for "${session.account.label}" with scopes [${session.scopes.join(', ')}].`);
 
     cachedLimit = determinePlanLimit();
 
-    const now = new Date();
-    const currentMonth: MonthRef = {
-        year: now.getFullYear(),
-        month: now.getMonth() + 1,
-        monthKey: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-    };
-
-    const currentMonthData = await fetchMonthlyBillingData(
-        userLogin,
-        session.accessToken,
-        currentMonth.year,
-        currentMonth.month
-    );
-
-    if (!currentMonthData) {
+    const quota = await fetchCopilotQuota(session.accessToken);
+    if (!quota) {
         return 'api_error';
     }
 
-    cachedUsageData = currentMonthData;
-    cachedTotalUsed = sumGrossQuantity(currentMonthData.usageItems);
-
-    await syncMissingPreviousMonths(userLogin, session.accessToken, cachedLimit);
+    cachedTotalUsed = quota.used;
+    if (quota.limit > 0) {
+        cachedLimit = quota.limit;
+    }
+    log(`Quota: used ${quota.used} of ${quota.limit || 'unknown'} (source: ${quota.source}).`);
 
     return 'success';
 }
 
-async function syncMissingPreviousMonths(login: string, accessToken: string, limit: number): Promise<void> {
-    const targetMonths = getPreviousMonthRefs(PREVIOUS_MONTH_COUNT);
-    const allowedMonthKeys = new Set(targetMonths.map(monthRef => monthRef.monthKey));
-    let history = filterAndSortHistory(readHistoryFromState(), allowedMonthKeys);
+type CopilotQuota = { used: number; limit: number; source: string };
 
-    const existingMonths = new Set(history.map(item => item.monthKey));
-    let didChange = history.length !== cachedPreviousHistory.length;
+// The API sends these as numbers or numeric strings; an entitlement of -1 means unlimited.
+type QuotaSnapshot = {
+    credits_used?: number | string;
+    entitlement?: number | string;
+    remaining?: number | string;
+    percent_remaining?: number | string;
+    unlimited?: boolean;
+};
 
-    for (const monthRef of targetMonths) {
-        if (existingMonths.has(monthRef.monthKey)) {
-            continue;
-        }
-
-        const usageData = await fetchMonthlyBillingData(login, accessToken, monthRef.year, monthRef.month);
-        if (!usageData) {
-            continue;
-        }
-
-        const snapshot = createSnapshot(monthRef, sumGrossQuantity(usageData.usageItems), limit);
-        history = upsertAndFilterHistory(history, snapshot, allowedMonthKeys);
-        didChange = true;
-    }
-
-    cachedPreviousHistory = history;
-
-    if (didChange) {
-        await saveHistoryToState(history);
-    }
-}
-
-async function refreshPreviousMonthsFromApi(): Promise<RefreshResult> {
-    const session = await vscode.authentication.getSession('github', ['user'], { createIfNone: false });
-
-    if (!session) {
-        return 'not_logged_in';
-    }
-
-    const userLogin = await fetchAuthenticatedUserLogin(session.accessToken);
-    if (!userLogin) {
-        return 'api_error';
-    }
-
-    const historyTargets = getPreviousMonthRefs(PREVIOUS_MONTH_COUNT);
-    const allowedMonthKeys = new Set(historyTargets.map(monthRef => monthRef.monthKey));
-    let history = filterAndSortHistory(readHistoryFromState(), allowedMonthKeys);
-    let hasAnySuccess = false;
-    let hadAnyFailure = false;
-
-    for (const monthRef of historyTargets) {
-        const usageData = await fetchMonthlyBillingData(userLogin, session.accessToken, monthRef.year, monthRef.month);
-
-        if (!usageData) {
-            hadAnyFailure = true;
-            continue;
-        }
-
-        const snapshot = createSnapshot(monthRef, sumGrossQuantity(usageData.usageItems), cachedLimit);
-        history = upsertAndFilterHistory(history, snapshot, allowedMonthKeys);
-        hasAnySuccess = true;
-    }
-
-    if (!hasAnySuccess) {
-        return 'api_error';
-    }
-
-    cachedPreviousHistory = history;
-    await saveHistoryToState(history);
-
-    return hadAnyFailure ? 'partial' : 'success';
-}
-
-async function fetchAuthenticatedUserLogin(accessToken: string): Promise<string | null> {
+async function fetchCopilotQuota(accessToken: string): Promise<CopilotQuota | null> {
     try {
-        const userResponse = await fetchWithTimeout('https://api.github.com/user', {
+        const response = await fetchWithTimeout('https://api.github.com/copilot_internal/user', {
             headers: {
                 Authorization: `Bearer ${accessToken}`,
-                Accept: 'application/vnd.github+json',
-                'X-GitHub-Api-Version': '2026-03-10'
+                Accept: 'application/json'
             }
         });
 
-        if (!userResponse.ok) {
+        if (!response.ok) {
+            await logHttpFailure('GET copilot_internal/user', response);
             return null;
         }
 
-        const userData = await userResponse.json() as { login?: string };
-        return userData.login || null;
-    } catch {
+        const bodyText = await response.text();
+        log(`copilot_internal/user body: ${bodyText.slice(0, MAX_LOGGED_QUOTA_BODY_LENGTH)}`);
+
+        const quota = parseCopilotQuota(JSON.parse(bodyText) as { quota_snapshots?: Record<string, QuotaSnapshot> });
+        if (!quota) {
+            log('Could not find a usable quota in copilot_internal/user response.');
+        }
+        return quota;
+    } catch (error) {
+        log('GET copilot_internal/user threw.', error);
         return null;
     }
 }
 
-async function fetchMonthlyBillingData(login: string, accessToken: string, year: number, month: number): Promise<BillingUsageResponse | null> {
-    try {
-        const billingResponse = await fetchWithTimeout(`https://api.github.com/users/${login}/settings/billing/ai_credit/usage?year=${year}&month=${month}`, {
-            headers: {
-                Authorization: `Bearer ${accessToken}`,
-                Accept: 'application/vnd.github+json',
-                'X-GitHub-Api-Version': '2026-03-10'
-            }
-        });
+function toNumber(value: number | string | undefined): number | undefined {
+    if (value === undefined || value === '') {
+        return undefined;
+    }
 
-        if (!billingResponse.ok) {
-            return null;
-        }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
 
-        return await billingResponse.json() as BillingUsageResponse;
-    } catch {
+function parseCopilotQuota(data: { quota_snapshots?: Record<string, QuotaSnapshot> }): CopilotQuota | null {
+    const snapshots = Object.entries(data.quota_snapshots ?? {})
+        .filter(([, snapshot]) => snapshot && !snapshot.unlimited && (toNumber(snapshot.entitlement) ?? 0) > 0);
+
+    // Prefer an entry that is explicitly about credits, then premium requests, then whatever is left.
+    const preferred = snapshots.find(([name]) => /credit/i.test(name))
+        ?? snapshots.find(([name]) => /premium/i.test(name))
+        ?? snapshots[0];
+
+    if (!preferred) {
         return null;
     }
+
+    const [name, snapshot] = preferred;
+    const limit = toNumber(snapshot.entitlement) ?? 0;
+    const creditsUsed = toNumber(snapshot.credits_used);
+    const remaining = toNumber(snapshot.remaining);
+    const percentRemaining = toNumber(snapshot.percent_remaining);
+
+    if (creditsUsed !== undefined) {
+        return { used: creditsUsed, limit, source: name };
+    }
+    if (remaining !== undefined) {
+        return { used: Math.max(limit - remaining, 0), limit, source: name };
+    }
+    if (percentRemaining !== undefined) {
+        return { used: Math.max(limit * (1 - percentRemaining / 100), 0), limit, source: name };
+    }
+    return null;
+}
+
+async function logHttpFailure(label: string, response: Response): Promise<void> {
+    let body = '';
+    try {
+        body = (await response.text()).slice(0, MAX_LOGGED_BODY_LENGTH);
+    } catch {
+        // Body is only for diagnostics.
+    }
+
+    const acceptedScopes = response.headers.get('x-accepted-oauth-scopes');
+    const grantedScopes = response.headers.get('x-oauth-scopes');
+    log(`${label} failed: HTTP ${response.status} ${response.statusText}; token scopes [${grantedScopes ?? 'n/a'}]; accepted scopes [${acceptedScopes ?? 'n/a'}]; body: ${body}`);
 }
 
 async function fetchWithTimeout(input: string, init: RequestInit): Promise<Response> {
     const controller = new AbortController();
     const timeoutHandle = setTimeout(() => controller.abort(), GITHUB_API_TIMEOUT_MS);
+    const startedAt = Date.now();
+
+    const headers = Object.entries((init.headers ?? {}) as Record<string, string>)
+        .map(([name, value]) => `${name}: ${name.toLowerCase() === 'authorization' ? 'Bearer ***' : value}`)
+        .join('; ');
+    log(`-> ${init.method ?? 'GET'} ${input} [${headers}]`);
 
     try {
-        return await fetch(input, {
+        const response = await fetch(input, {
             ...init,
             signal: controller.signal
         });
+        log(`<- HTTP ${response.status} in ${Date.now() - startedAt}ms (request id: ${response.headers.get('x-github-request-id') ?? 'n/a'})`);
+        return response;
     } finally {
         clearTimeout(timeoutHandle);
     }
 }
 
-function readHistoryFromState(): MonthlyUsageSnapshot[] {
-    if (!extensionContext) {
-        return [];
-    }
-
-    const targetMonths = getPreviousMonthRefs(PREVIOUS_MONTH_COUNT);
-    const allowedMonthKeys = new Set(targetMonths.map(monthRef => monthRef.monthKey));
-    const storedHistory = extensionContext.globalState.get<MonthlyUsageSnapshot[]>(HISTORY_KEY, []);
-    return filterAndSortHistory(storedHistory, allowedMonthKeys);
-}
-
-async function saveHistoryToState(history: MonthlyUsageSnapshot[]): Promise<void> {
-    if (!extensionContext) {
-        return;
-    }
-
-    await extensionContext.globalState.update(HISTORY_KEY, history);
-}
-
 function determinePlanLimit(): number {
-    const configLimit = vscode.workspace.getConfiguration('copilotCreditTracker').get<number>('monthlyLimit');
+    const configLimit = vscode.workspace.getConfiguration('copilotTrackerEnt').get<number>('monthlyLimit');
     if (configLimit && configLimit > 0) {
         return configLimit;
     }
@@ -323,61 +332,20 @@ async function showDetailsPanel(): Promise<void> {
     });
 
     detailsPanel.webview.onDidReceiveMessage(async (message: { command?: string }) => {
-        if (message.command !== 'refreshHistory') {
+        log(`Panel action: ${message.command ?? 'unknown'}.`);
+        if (message.command === 'refreshUsage') {
+            await updateStatusBar();
             return;
         }
 
-        detailsPanel?.webview.postMessage({
-            command: 'refreshState',
-            state: 'running',
-            message: 'Refreshing historical usage...'
-        });
+        if (message.command === 'reauthenticate') {
+            await reauthenticate();
+            return;
+        }
 
-        try {
-            const refreshResult = await refreshPreviousMonthsFromApi();
-
-            if (refreshResult === 'not_logged_in') {
-                vscode.window.showWarningMessage('Please sign in to GitHub before refreshing historical usage.');
-                detailsPanel?.webview.postMessage({
-                    command: 'refreshState',
-                    state: 'done',
-                    level: 'warning',
-                    message: 'Sign in required. Close and reopen this panel after signing in.'
-                });
-            } else if (refreshResult === 'api_error') {
-                vscode.window.showErrorMessage('Failed to refresh historical usage data from GitHub.');
-                detailsPanel?.webview.postMessage({
-                    command: 'refreshState',
-                    state: 'done',
-                    level: 'error',
-                    message: 'Refresh failed. Close and reopen this panel to try again.'
-                });
-            } else if (refreshResult === 'partial') {
-                vscode.window.showWarningMessage('History refresh completed with partial data. Close and reopen this panel to see the latest cached data.');
-                detailsPanel?.webview.postMessage({
-                    command: 'refreshState',
-                    state: 'done',
-                    level: 'warning',
-                    message: 'Refresh finished with partial data. Close and reopen this panel to view updates.'
-                });
-            } else {
-                vscode.window.showInformationMessage('History refresh completed. Close and reopen this panel to see the latest cached data.');
-                detailsPanel?.webview.postMessage({
-                    command: 'refreshState',
-                    state: 'done',
-                    level: 'info',
-                    message: 'Refresh completed. Close and reopen this panel to view updates.'
-                });
-            }
-        } catch (error) {
-            console.error('Unexpected error while refreshing history', error);
-            vscode.window.showErrorMessage('Unexpected error while refreshing history data.');
-            detailsPanel?.webview.postMessage({
-                command: 'refreshState',
-                state: 'done',
-                level: 'error',
-                message: 'Unexpected error during refresh. Close and reopen this panel to retry.'
-            });
+        if (message.command === 'showLog') {
+            outputChannel.show(true);
+            return;
         }
     });
 
@@ -385,45 +353,12 @@ async function showDetailsPanel(): Promise<void> {
 }
 
 async function renderDetailsPanel(panel: vscode.WebviewPanel): Promise<void> {
-    cachedPreviousHistory = readHistoryFromState();
-
-    let breakdownHtml = '';
-    if (cachedUsageData?.usageItems && cachedUsageData.usageItems.length > 0) {
-        breakdownHtml = cachedUsageData.usageItems
-        // Add sort of results for release 0.0.5.
-        .sort((firstItem, secondItem) =>
-            (secondItem.grossQuantity ?? 0) - (firstItem.grossQuantity ?? 0))
-        .map((item) => `
-            <tr style="border-bottom: 1px solid var(--vscode-panel-border);">
-                <td style="padding: 12px 8px;">${escapeHtml(item.model || item.sku || 'Unknown')}</td>
-                <td style="padding: 12px 8px;">${(item.grossQuantity || 0).toFixed(2)}</td>
-            </tr>
-        `).join('');
-    } else {
-        breakdownHtml = '<tr><td colspan="2" style="padding: 12px 8px; text-align: center;">No model usage data available yet.</td></tr>';
-    }
-
     const usagePercentage = calculateUsagePercentage(cachedTotalUsed, cachedLimit).toFixed(1);
-    const isWarning = parseFloat(usagePercentage) > cachedMonthProgress;
-
-    const historyRowsHtml = cachedPreviousHistory.length > 0
-        ? cachedPreviousHistory.map((entry) => {
-            const syncedDate = new Date(entry.lastSyncedAt);
-            const syncedLabel = Number.isNaN(syncedDate.getTime())
-                ? 'Unknown'
-                : syncedDate.toLocaleDateString('en-US');
-
-            return `
-                <tr style="border-bottom: 1px solid var(--vscode-panel-border);">
-                    <td style="padding: 12px 8px;">${formatMonthLabel(entry.year, entry.month)}</td>
-                    <td style="padding: 12px 8px;">${entry.totalUsed.toFixed(2)}</td>
-                    <td style="padding: 12px 8px;">${entry.limit}</td>
-                    <td style="padding: 12px 8px;">${entry.usagePct.toFixed(1)}%</td>
-                    <td style="padding: 12px 8px;">${syncedLabel}</td>
-                </tr>
-            `;
-        }).join('')
-        : '<tr><td colspan="5" style="padding: 12px 8px; text-align: center;">No historical data cached yet.</td></tr>';
+    const budget = getDailyBudget(cachedTotalUsed, cachedLimit, cachedWorkdays);
+    const pace = budget.status;
+    const isWarning = pace === 'over';
+    const monthTimelineHtml = buildMonthTimelineHtml(budget);
+    const dayTimelineHtml = buildDayTimelineHtml(budget);
 
     const htmlContent = `
         <!DOCTYPE html>
@@ -454,144 +389,91 @@ async function renderDetailsPanel(panel: vscode.WebviewPanel): Promise<void> {
                 .metric p { margin: 12px 0 0 0; font-size: 28px; font-weight: bold; color: var(--vscode-textLink-foreground); }
                 .metric p span { font-size: 16px; color: var(--vscode-descriptionForeground); font-weight: normal; }
                 .warning { color: var(--vscode-errorForeground) !important; }
-                table { width: 100%; border-collapse: collapse; margin-top: 10px; text-align: left; }
-                th { padding: 12px 8px; border-bottom: 2px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground); font-weight: 600; }
-                .section-header {
-                    margin-top: 30px;
+                .timeline { margin: 0 24px 28px; max-width: 760px; }
+                .arrow-row { position: relative; height: 38px; }
+                .arrow {
+                    position: absolute;
+                    bottom: 0;
+                    transform: translateX(-50%);
                     display: flex;
-                    justify-content: space-between;
+                    flex-direction: column;
                     align-items: center;
+                    font-size: 13px;
+                    font-weight: 600;
+                    line-height: 1.1;
+                    white-space: nowrap;
                 }
-                .refresh-button {
-                    border: 1px solid var(--vscode-button-border, transparent);
-                    background: var(--vscode-button-background);
-                    color: var(--vscode-button-foreground);
-                    border-radius: 6px;
-                    padding: 6px 12px;
-                    cursor: pointer;
+                .arrow-side { position: absolute; bottom: 0; font-size: 13px; font-weight: 600; white-space: nowrap; }
+                .arrow-side.left { left: -20px; }
+                .arrow-side.right { right: -20px; }
+                .bar {
+                    position: relative;
+                    height: 16px;
+                    border: 1px solid var(--vscode-panel-border);
+                    border-radius: 4px;
+                    background: var(--vscode-editorWidget-background);
                 }
-                .refresh-button:hover {
-                    background: var(--vscode-button-hoverBackground);
+                .bar-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 3px 0 0 3px; opacity: 0.45; }
+                .bar-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--vscode-panel-border); }
+                .bar-marker {
+                    position: absolute;
+                    top: -5px;
+                    bottom: -5px;
+                    width: 2px;
+                    margin-left: -1px;
+                    background: var(--vscode-editor-foreground);
                 }
-                .refresh-status {
-                    margin-left: 10px;
-                    font-size: 12px;
-                    color: var(--vscode-descriptionForeground);
-                }
-                .refresh-status.warning {
-                    color: var(--vscode-warningForeground);
-                }
-                .refresh-status.error {
-                    color: var(--vscode-errorForeground);
-                }
+                .bar-axis { display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; color: var(--vscode-descriptionForeground); }
+                .legend { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 12px; font-size: 12px; }
+                .legend-item { display: flex; align-items: center; gap: 6px; }
+                .legend-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+                .legend-line { display: inline-block; width: 2px; height: 12px; background: var(--vscode-editor-foreground); }
+                .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; }
+                .toolbar-status { font-size: 12px; color: var(--vscode-descriptionForeground); margin-left: 6px; }
             </style>
         </head>
         <body>
-            <h1>GitHub Copilot Monthly Breakdown</h1>
+            <div class="toolbar">
+                <button class="refresh-button" data-command="refreshUsage">Refresh</button>
+                <button class="refresh-button" data-command="reauthenticate">Re-authenticate</button>
+                <button class="refresh-button" data-command="showLog">Logs</button>
+                <span class="toolbar-status">${escapeHtml(lastRefreshSummary)}</span>
+            </div>
+
+            <h1>GitHub Copilot Credits</h1>
 
             <div class="summary-card">
                 <div class="metric">
-                    <h3>Month Elapsed</h3>
-                    <p>${cachedMonthProgress.toFixed(0)}%</p>
+                    <h3>Workdays Elapsed</h3>
+                    <p>${cachedWorkdays.elapsed} <span>/ ${cachedWorkdays.total}</span></p>
                 </div>
                 <div class="metric">
                     <h3>Total Credits Used</h3>
                     <p>${cachedTotalUsed.toFixed(2)} <span>/ ${cachedLimit}</span></p>
                 </div>
                 <div class="metric">
-                    <h3>Usage Percentage</h3>
-                    <p class="${isWarning ? 'warning' : ''}">${usagePercentage}%</p>
+                    <h3>Usage</h3>
+                    <p class="${isWarning ? 'warning' : ''}">${PACE_ICONS[pace]} ${usagePercentage}%</p>
                 </div>
             </div>
 
-            <h2>Usage by AI Model</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Model Name</th>
-                        <th>Credits Consumed</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${breakdownHtml}
-                </tbody>
-            </table>
+            <h2>Month</h2>
+            ${monthTimelineHtml}
 
-            <div class="section-header">
-                <h2>Previous 12 Months</h2>
-                <div>
-                    <button id="refreshHistoryButton" class="refresh-button">Refresh History</button>
-                    <span id="refreshStatus" class="refresh-status" aria-live="polite"></span>
-                </div>
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Month</th>
-                        <th>Credits Used</th>
-                        <th>Limit</th>
-                        <th>Usage %</th>
-                        <th>Synced</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${historyRowsHtml}
-                </tbody>
-            </table>
+            <h2>Today</h2>
+            ${dayTimelineHtml}
 
             <script>
                 const vscodeApi = acquireVsCodeApi();
-                const refreshButton = document.getElementById('refreshHistoryButton');
-                const refreshStatus = document.getElementById('refreshStatus');
-                const defaultButtonText = 'Refresh History';
-                const refreshTimeoutMs = 25000;
-                let refreshFallbackHandle;
-
-                function clearRefreshFallback() {
-                    if (refreshFallbackHandle) {
-                        clearTimeout(refreshFallbackHandle);
-                        refreshFallbackHandle = undefined;
-                    }
-                }
-
-                function updateRefreshUi(isRefreshing, statusText, level) {
-                    if (refreshButton) {
-                        refreshButton.disabled = isRefreshing;
-                        refreshButton.textContent = isRefreshing ? 'Refreshing...' : defaultButtonText;
-                    }
-
-                    if (refreshStatus) {
-                        refreshStatus.textContent = statusText || '';
-                        refreshStatus.className = 'refresh-status' + (level ? ' ' + level : '');
-                    }
-                }
-
-                refreshButton?.addEventListener('click', () => {
-                    updateRefreshUi(true, 'Refreshing historical usage...', 'info');
-                    clearRefreshFallback();
-                    refreshFallbackHandle = setTimeout(() => {
-                        updateRefreshUi(false, 'Refresh is taking longer than expected. You can close and reopen this panel later.', 'warning');
-                    }, refreshTimeoutMs);
-                    vscodeApi.postMessage({ command: 'refreshHistory' });
-                });
-
-                window.addEventListener('message', (event) => {
-                    const message = event.data;
-                    if (message?.command !== 'refreshState') {
-                        return;
-                    }
-
-                    if (message.state === 'running') {
-                        updateRefreshUi(true, message.message || 'Refreshing historical usage...', 'info');
-                        clearRefreshFallback();
-                        refreshFallbackHandle = setTimeout(() => {
-                            updateRefreshUi(false, 'Refresh is taking longer than expected. You can close and reopen this panel later.', 'warning');
-                        }, refreshTimeoutMs);
-                        return;
-                    }
-
-                    clearRefreshFallback();
-                    updateRefreshUi(false, message.message || 'Refresh finished.', message.level || 'info');
+                document.querySelectorAll('.toolbar button').forEach((button) => {
+                    button.addEventListener('click', () => {
+                        const command = button.dataset.command;
+                        if (command !== 'showLog') {
+                            button.disabled = true;
+                            button.textContent = 'Working...';
+                        }
+                        vscodeApi.postMessage({ command });
+                    });
                 });
             </script>
         </body>
@@ -599,6 +481,73 @@ async function renderDetailsPanel(panel: vscode.WebviewPanel): Promise<void> {
     `;
 
     panel.webview.html = htmlContent;
+}
+
+type LegendItem = { marker: 'arrow' | 'line' | 'fill'; label: string; value: string };
+
+function buildTimelineHtml(timeline: Timeline, status: PaceStatus, ticks: number, overLabel: string, underLabel: string, legend: LegendItem[], markerTitle: string): string {
+    const color = STATUS_COLORS[status];
+    const { arrow } = timeline;
+    const percent = (fraction: number): string => (fraction * 100).toFixed(2);
+
+    let arrowHtml: string;
+    if (arrow.overflow === 'left') {
+        arrowHtml = `<div class="arrow-side left" style="color: ${color};">&#9664; ${formatCredits(arrow.delta)} ${underLabel}</div>`;
+    } else if (arrow.overflow === 'right') {
+        arrowHtml = `<div class="arrow-side right" style="color: ${color};">${formatCredits(arrow.delta)} ${overLabel} &#9654;</div>`;
+    } else {
+        arrowHtml = `<div class="arrow" style="left: ${percent(arrow.position)}%; color: ${color};"><span>${formatCredits(cachedTotalUsed)}</span><span>&#9660;</span></div>`;
+    }
+
+    const fillWidth = arrow.overflow === 'left' ? 0 : arrow.overflow === 'right' ? 1 : arrow.position;
+    const tickHtml = Array.from({ length: Math.max(ticks - 1, 0) }, (_, index) =>
+        `<div class="bar-tick" style="left: ${percent((index + 1) / ticks)}%;"></div>`).join('');
+
+    const legendHtml = legend.map((item) => {
+        const swatch = item.marker === 'line'
+            ? '<span class="legend-line"></span>'
+            : `<span class="legend-swatch" style="background: ${item.marker === 'arrow' ? color : color + '73'};"></span>`;
+        return `<div class="legend-item">${swatch}<span>${escapeHtml(item.label)}: <strong>${escapeHtml(item.value)}</strong></span></div>`;
+    }).join('');
+
+    return `<div class="timeline">
+        <div class="arrow-row">${arrowHtml}</div>
+        <div class="bar">
+            <div class="bar-fill" style="width: ${percent(fillWidth)}%; background: ${color};"></div>
+            ${tickHtml}
+            <div class="bar-marker" style="left: ${percent(timeline.marker)}%;" title="${escapeHtml(markerTitle)}"></div>
+        </div>
+        <div class="bar-axis"><span>${formatCredits(timeline.start)}</span><span>${formatCredits(timeline.end)}</span></div>
+        <div class="legend">${legendHtml}</div>
+    </div>`;
+}
+
+function buildMonthTimelineHtml(budget: DailyBudget): string {
+    const timeline = getMonthTimeline(cachedTotalUsed, cachedLimit, cachedWorkdays);
+    const allowanceToday = budget.perDay * cachedWorkdays.elapsed;
+    const standing = budget.status === 'over'
+        ? `${formatCredits(budget.amount)} over`
+        : budget.status === 'under' ? `${formatCredits(budget.amount)} ahead` : 'on pace';
+
+    return buildTimelineHtml(timeline, budget.status, cachedWorkdays.total, 'over limit', 'ahead', [
+        { marker: 'arrow', label: 'Used', value: `${formatCredits(cachedTotalUsed)} of ${formatCredits(cachedLimit)} (${calculateUsagePercentage(cachedTotalUsed, cachedLimit).toFixed(1)}%)` },
+        { marker: 'line', label: `Today (workday ${cachedWorkdays.elapsed} of ${cachedWorkdays.total})`, value: `${formatCredits(allowanceToday)} allowed so far` },
+        { marker: 'fill', label: 'Per workday', value: formatCredits(budget.perDay) },
+        { marker: 'fill', label: 'Standing', value: standing }
+    ], 'Allowance through today');
+}
+
+function buildDayTimelineHtml(budget: DailyBudget): string {
+    const timeline = getDayTimeline(cachedTotalUsed, cachedLimit, cachedWorkdays);
+    const now = new Date();
+    const intoSlice = Math.min(Math.max(cachedTotalUsed - timeline.start, 0), budget.perDay);
+
+    return buildTimelineHtml(timeline, budget.status, 4, 'over', 'ahead', [
+        { marker: 'arrow', label: 'Used', value: formatCredits(cachedTotalUsed) },
+        { marker: 'line', label: 'Now', value: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) },
+        { marker: 'fill', label: 'Allowance for today', value: `${formatCredits(timeline.start)} to ${formatCredits(timeline.end)}` },
+        { marker: 'fill', label: 'Spent of today', value: `${formatCredits(intoSlice)} / ${formatCredits(budget.perDay)}` }
+    ], 'Time of day (weekends show the full day)');
 }
 
 function escapeHtml(value: string): string {

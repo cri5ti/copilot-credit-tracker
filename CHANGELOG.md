@@ -1,54 +1,25 @@
-# Change Log
+# Changelog
 
-All notable changes to the "copilot-credit-tracker" extension will be documented in this file.
+All notable changes to "Copilot Tracker Ent" are documented here, following [Keep a Changelog](https://keepachangelog.com/).
 
-Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
+## [0.2.0] - 2026-10-20
 
-## [Unreleased]
-
-- No unreleased changes yet.
-
-## [0.1.3] - 2026-09-04
-
-- Corrected the release after the wrong version was previously compiled and published.
-
-## [0.1.2] - 2026-09-03
-
-### Changed
-
-- Updated the README for improved clarity and a more complete project overview.
-- Sorted the usage breakdown in the details panel (solves issue #1).
-
-## [0.1.1] - 2026-08-01
-
-### Changed
-
-- Bumped extension version in `package.json` to `0.1.1` due to some issues on getting the version to update on the marketplace. No code changes were made in this release.
-
-## [0.1.0] - 2026-08-01
+First release of Copilot Tracker Ent, an enterprise-only departure from the fork it started as.
 
 ### Added
 
-- Added `src/history.ts` with history management helpers for usage tracking.
+- Status bar item with a coloured circle, the share of monthly credits used and how you stand against the daily allowance: `🟢 59% (+34 [455])`.
+- Details panel with a Month timeline and a Today timeline, each with an arrow at credits used, a line for today and a legend.
+- Panel toolbar with Refresh, Re-authenticate and Logs buttons, and matching commands.
+- "Copilot Tracker Ent" output channel that logs each GitHub request (status, duration, request id; tokens are never logged).
 
 ### Changed
 
-- Refactored the command flow in `src/extension.ts` to show a more detailed usage breakdown in Copilot Credit Tracker.
-- Bumped extension version in `package.json` to `0.1.0`.
+- Usage now comes from the Copilot quota endpoint VS Code itself uses (`copilot_internal/user`), so it works for enterprise-managed accounts.
+- Only the `read:user` scope is requested, which VS Code already holds.
+- Month progress counts workdays (Monday to Friday) instead of calendar days.
+- Refreshes every 15 minutes.
 
-### Tests
+### Removed
 
-- Expanded test coverage in `src/test/extension.test.ts` for the new history behavior and detailed breakdown flow.
-
-## [0.0.4] - 2026-07-16
-
-### Changed
-
-- Refresh the status bar usage data every 30 minutes (previously every hour).
-- Updated extension version to `0.0.4`.
-
-## [0.0.3] - 2026-07-16
-
-### Added
-
-- Initial public release.
+- The billing API calls, the 12-month history and the per-model breakdown from the original, which enterprise-managed accounts cannot access.
