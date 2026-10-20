@@ -1,5 +1,7 @@
 # Copilot Tracker Ent
 
+[![Marketplace version](https://img.shields.io/visual-studio-marketplace/v/cri5ti.copilot-tracker-ent)](https://marketplace.visualstudio.com/items?itemName=cri5ti.copilot-tracker-ent) [![Installs](https://img.shields.io/visual-studio-marketplace/i/cri5ti.copilot-tracker-ent)](https://marketplace.visualstudio.com/items?itemName=cri5ti.copilot-tracker-ent) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A VS Code status bar item that shows how many GitHub Copilot AI credits you have used this month, compared with how far through the month's workdays you are.
 
 ![Status bar](docs/status-bar.png)
