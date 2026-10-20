@@ -215,10 +215,22 @@ async function fetchCopilotQuota(accessToken: string): Promise<CopilotQuota | nu
             return null;
         }
 
-        const bodyText = await response.text();
-        log(`copilot_internal/user body: ${bodyText.slice(0, MAX_LOGGED_QUOTA_BODY_LENGTH)}`);
+        const data = await response.json() as {
+            copilot_plan?: string;
+            access_type_sku?: string;
+            quota_reset_date?: string;
+            quota_snapshots?: Record<string, QuotaSnapshot>;
+        };
 
-        const quota = parseCopilotQuota(JSON.parse(bodyText) as { quota_snapshots?: Record<string, QuotaSnapshot> });
+        // Only the quota fields are logged; the full response also carries account identifiers.
+        log(`copilot_internal/user: ${JSON.stringify({
+            copilot_plan: data.copilot_plan,
+            access_type_sku: data.access_type_sku,
+            quota_reset_date: data.quota_reset_date,
+            quota_snapshots: data.quota_snapshots
+        }).slice(0, MAX_LOGGED_QUOTA_BODY_LENGTH)}`);
+
+        const quota = parseCopilotQuota(data);
         if (!quota) {
             log('Could not find a usable quota in copilot_internal/user response.');
         }

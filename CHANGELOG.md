@@ -2,6 +2,13 @@
 
 All notable changes to "Copilot Tracker Ent" are documented here, following [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.1] - 2026-10-20
+
+### Changed
+
+- New extension icon and display name ("Copilot Tracker (Enterprise)").
+- The log now records only the plan and quota fields from `copilot_internal/user`, not the full response (which includes account identifiers).
+
 ## [0.2.0] - 2026-10-20
 
 First release of Copilot Tracker Ent, an enterprise-only departure from the fork it started as.

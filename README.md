@@ -70,7 +70,7 @@ The quota endpoint is internal and undocumented, so GitHub can change it without
 
 ## Troubleshooting
 
-Run **Copilot Tracker Ent: Show Log** from the Command Palette, or press **Logs** in the panel. It lists each GitHub request, its HTTP status and the token scopes. No tokens are logged.
+Run **Copilot Tracker Ent: Show Log** from the Command Palette, or press **Logs** in the panel. It lists each GitHub request, its HTTP status, your GitHub login and the token scopes, plus your plan and quota figures. Tokens are never logged. Check the log before pasting it anywhere public.
 
 ## Privacy
 
