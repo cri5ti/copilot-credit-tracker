@@ -2,6 +2,24 @@
 
 All notable changes to "Copilot Tracker Ent" are documented here, following [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.0] - 2026-11-05
+
+### Added
+
+- Local usage history in SQLite (`node:sqlite`), shared by all VS Code windows. A row is stored only when usage changes, with the delta since the previous one.
+- Credits-per-day and credits-per-15-minutes spike charts under the Month and Today timelines.
+- Remaining-budget trend charts for the month and for today, with the ideal line.
+- Planning days off: click or drag across days in the month chart to switch them on or off or set a part-day workload. The budget is redistributed accordingly.
+- Plan controls: From and To dates and a Budget, defaulting to the whole month and the full limit, with **Reset to today** for a fresh start with the remaining credits.
+- `copilotTrackerEnt.refreshIntervalMinutes` setting (default 5).
+
+### Changed
+
+- Refreshes are coordinated across windows: only one window calls GitHub per interval, and never more than once every 15 seconds, including manual refreshes.
+- The daily allowance follows the plan and its weighted workdays instead of the month's Monday-to-Friday count.
+- The panel keeps its state (plan form, selected days) across refreshes.
+- Panel layout: the plan form (From, To, Budget, with the reset buttons on a second line) moved to the bottom, the title is gone, and Refresh, Re-authenticate and Logs are in a menu at the top right.
+
 ## [0.2.1] - 2026-10-20
 
 ### Changed
