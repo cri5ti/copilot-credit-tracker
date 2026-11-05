@@ -3,7 +3,7 @@
   "displayName": "Copilot Tracker (Enterprise)",
   "description": "Status bar tracker for GitHub Copilot AI credits on enterprise-managed accounts, paced against the month's workdays.",
   "icon": "logo.png",
-  "version": "1.0.0",
+  "version": "0.3.0",
   "publisher": "cri5ti",
   "repository": {
     "type": "git",
