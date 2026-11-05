@@ -4,6 +4,11 @@
 
 A VS Code status bar item that shows how many GitHub Copilot AI credits you have used this month, compared with how far through the month's workdays you are.
 
+- **Pace against a plan:** the monthly budget is spread over your workdays, and you can mark days off or part days to redistribute it.
+- **History:** usage is recorded locally on every change, so the panel can plot credits per day and per 15 minutes.
+- **Trend charts:** remaining budget against the ideal line, for the month and for today.
+- **Many windows, one fetch:** all VS Code windows share one refresh schedule instead of each calling GitHub.
+
 ![Status bar](docs/status-bar.png)
 
 **Enterprise only.** This extension is built for enterprise-managed GitHub accounts (for example `name_company` logins with a Copilot Business or Enterprise seat). It was not designed or tested for personal Copilot plans.
@@ -30,14 +35,18 @@ The tooltip also shows credits used, the limit, the workday count and, with a cu
 
 Click the status bar item for the full panel.
 
-![Panel](docs/preview.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/cri5ti/copilot-credit-tracker/main/docs/preview-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/cri5ti/copilot-credit-tracker/main/docs/preview-light.png">
+  <img alt="Panel" src="docs/preview-light.png">
+</picture>
 
-- **Plan:** a From and To date and a Budget. Every month starts with the 1st, the last day and the full limit. **Reset to today** gives you a fresh start: from today, with the credits remaining this month. **Month defaults** goes back to the whole month.
 - **Month:** a bar from 0 to the plan budget, one tick per workday. The arrow shows credits used in the plan and the line marks the allowance through today.
   - **Credits per day:** a spike per day with the day's allowance as a short line. Spikes over the allowance are red. Click a day, drag across a range or shift-click to extend, then use the popup to switch the days on or off or set a part-day workload (0 to 100%). The budget is redistributed over the remaining workload. Weekends are off and weekdays on, unless you plan otherwise; **Weekday default** clears a planned day.
   - **Remaining budget:** what is left of the plan budget over the month, against the ideal line that spends each day's allowance evenly.
 - **Today:** the same bar zoomed in on today's slice. The line is the time of day (the full bar on days off). If you are outside the slice, the arrow becomes a side arrow showing the credits ahead or over.
   - **Credits per 15 minutes** and **Remaining budget today**, the same two charts for today.
+- **Plan** (bottom of the panel): a From and To date and a Budget. Every month starts with the 1st, the last day and the full limit. **Reset to today** gives you a fresh start: from today, with the credits remaining this month. **Month defaults** goes back to the whole month.
 - A menu (the three dots, top right) with **Refresh**, **Re-authenticate** and **Logs**. The same actions are in the Command Palette under "Copilot Tracker Ent".
 
 ## Install
@@ -74,6 +83,14 @@ Run **Copilot Tracker Ent: Show Log** from the Command Palette, or press **Logs*
 ## Privacy
 
 The extension uses VS Code's built-in GitHub sign-in with the `read:user` scope and makes one call per refresh, to `https://api.github.com/copilot_internal/user`. The credit totals, your planned days and your plan are stored only in the local database described above. Nothing is sent anywhere else.
+
+## Changelog
+
+**0.3.0** adds the local usage history, the per-day and per-15-minute spike charts, the remaining-budget trend charts, planning of days off, the editable plan (From, To, Budget, Reset to today), a shared refresh schedule across windows and a new panel layout. See [CHANGELOG.md](CHANGELOG.md) for every release.
+
+## Contributing
+
+Build, test and release steps are in [DEV.md](DEV.md).
 
 ## Fork notice
 
