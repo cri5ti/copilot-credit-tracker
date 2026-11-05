@@ -3,7 +3,7 @@
   "displayName": "Copilot Tracker (Enterprise)",
   "description": "Status bar tracker for GitHub Copilot AI credits on enterprise-managed accounts, paced against the month's workdays.",
   "icon": "logo.png",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "cri5ti",
   "repository": {
     "type": "git",
@@ -39,6 +39,12 @@
           "type": "number",
           "default": 7000,
           "description": "Fallback monthly AI credit limit, used only when GitHub does not report one for your account."
+        },
+        "copilotTrackerEnt.refreshIntervalMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "description": "How often usage is fetched from GitHub. The interval is shared by all VS Code windows, so several open windows still make one request per interval (and never more than one every 15 seconds)."
         }
       }
     },
@@ -65,6 +71,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "package": "npx @vscode/vsce package",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
     "test": "vscode-test"
