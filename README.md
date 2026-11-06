@@ -35,11 +35,7 @@ The tooltip also shows credits used, the limit, the workday count and, with a cu
 
 Click the status bar item for the full panel.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/cri5ti/copilot-credit-tracker/main/docs/preview-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/cri5ti/copilot-credit-tracker/main/docs/preview-light.png">
-  <img alt="Panel" src="docs/preview-light.png">
-</picture>
+![Panel](docs/preview-dark.png)
 
 - **Month:** a bar from 0 to the plan budget, one tick per workday. The arrow shows credits used in the plan and the line marks the allowance through today.
   - **Credits per day:** a spike per day with the day's allowance as a short line. Spikes over the allowance are red. Click a day, drag across a range or shift-click to extend, then use the popup to switch the days on or off or set a part-day workload (0 to 100%). The budget is redistributed over the remaining workload. Weekends are off and weekdays on, unless you plan otherwise; **Weekday default** clears a planned day.
